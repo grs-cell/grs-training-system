@@ -1,0 +1,1290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GRS Training Management System</title>
+
+<!-- Tailwind (zero-build utility classes) -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- Tabler icon webfont -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css" />
+
+<!-- React -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+
+<!-- Babel (in-browser JSX transform, so no build step is needed) -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+<!-- Chart.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" crossorigin></script>
+
+<!-- Firebase (compat build, so it works with plain <script> tags) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+
+<style>
+  body { margin: 0; }
+  @keyframes tms-spin { to { transform: rotate(360deg); } }
+  .tms-spin { display: inline-block; animation: tms-spin 0.8s linear infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+/* ======================================================================
+   1) FIREBASE CONFIG  \u2014  replace with your own project's config
+   See README.md for how to get this from the Firebase console.
+   ====================================================================== */
+window.__FIREBASE_CONFIG__ = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID",
+};
+</script>
+
+<script type="text/babel" data-presets="react" data-type="module">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+/* ---------------------------------------------------------------------- */
+/* Firebase setup                                                         */
+/* ---------------------------------------------------------------------- */
+
+const firebaseConfig = window.__FIREBASE_CONFIG__;
+const CONFIG_IS_PLACEHOLDER = !firebaseConfig || firebaseConfig.apiKey === "YOUR_API_KEY";
+
+let db = null;
+if (!CONFIG_IS_PLACEHOLDER) {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+}
+
+function watchKey(key, fallback, cb) {
+  if (!db) return () => {};
+  return db.collection("tms_data").doc(key).onSnapshot(
+    (snap) => cb(snap.exists ? (snap.data().value ?? fallback) : fallback),
+    (err) => { console.error("watch failed", key, err); cb(fallback); }
+  );
+}
+
+async function saveKey(key, value) {
+  if (!db) return false;
+  try {
+    await db.collection("tms_data").doc(key).set({ value, updatedAt: Date.now() });
+    return true;
+  } catch (e) {
+    console.error("save failed", key, e);
+    return false;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Constants                                                              */
+/* ---------------------------------------------------------------------- */
+
+const CURRICULUMS = [
+  { name: "SKILLZ Core", color: "#0F6E56", soft: "#E1F5EE" },
+  { name: "SKILLZ Guy", color: "#185FA5", soft: "#E6F1FB" },
+  { name: "SKILLZ Girl", color: "#993556", soft: "#FBEAF0" },
+  { name: "MindSKILLZ", color: "#534AB7", soft: "#EEEDFE" },
+  { name: "SKILLZ Plus", color: "#854F0B", soft: "#FAEEDA" },
+];
+const OTHER_CURRICULUM = { name: "Other", color: "#5F5E5A", soft: "#F1EFE8" };
+const ALL_CURRICULUMS = [...CURRICULUMS, OTHER_CURRICULUM];
+
+const TRAINING_LEVELS = [
+  { name: "Training of Coaches", color: "#5F5E5A", soft: "#F1EFE8" },
+  { name: "Training of Master Coaches", color: "#3B6D11", soft: "#EAF3DE" },
+  { name: "Training of Trainers", color: "#993C1D", soft: "#FAECE7" },
+  { name: "Refresher Training", color: "#A32D2D", soft: "#FCEBEB" },
+];
+const OTHER_LEVEL = { name: "Other", color: "#5F5E5A", soft: "#F1EFE8" };
+const ALL_LEVELS = [...TRAINING_LEVELS, OTHER_LEVEL];
+
+const STATUS_OPTIONS = [
+  { name: "Planned", color: "#5F5E5A", soft: "#F1EFE8" },
+  { name: "Ongoing", color: "#854F0B", soft: "#FAEEDA" },
+  { name: "Completed", color: "#0F6E56", soft: "#E1F5EE" },
+  { name: "Cancelled", color: "#993556", soft: "#FBEAF0" },
+];
+
+const CERT_TIERS = ["Coach", "Master Coach", "GRS Trainer", "Tier 2 Trainer (Local)", "Tier 1 Trainer (International)"];
+const TRAINER_STATUS = ["Active", "Inactive"];
+
+const DEFAULT_COUNTRIES = ["Kenya", "Uganda", "Tanzania", "Rwanda", "Zambia", "Zimbabwe", "Malawi", "South Africa", "Nigeria", "Ghana"];
+const GENDERS = ["Female", "Male", "Other/Prefer not to say"];
+
+const BRAND = {
+  pitch: "#0F241C", pitchSoft: "#16332A", teal: "#2F9E8F", tealDark: "#0F6E56",
+  amber: "#E0A526", bg: "#F4F6F5", card: "#FFFFFF", border: "#E3E7E4", ink: "#182722", sub: "#5C6B65",
+};
+
+const LOGO_B64 = "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";
+
+/* ---------------------------------------------------------------------- */
+/* Helpers                                                                 */
+/* ---------------------------------------------------------------------- */
+
+function makeId(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`; }
+function curriculumMeta(name) { return ALL_CURRICULUMS.find((t) => t.name === name) || OTHER_CURRICULUM; }
+function levelMeta(name) { return ALL_LEVELS.find((t) => t.name === name) || OTHER_LEVEL; }
+function statusMeta(name) { return STATUS_OPTIONS.find((s) => s.name === name) || STATUS_OPTIONS[0]; }
+
+function fmtDate(d) {
+  if (!d) return "\u2014";
+  const dt = new Date(d + "T00:00:00");
+  if (isNaN(dt.getTime())) return d;
+  return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function monthKey(d) { return d ? d.slice(0, 7) : null; }
+
+function csvEscape(v) {
+  const s = String(v ?? "");
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function parseCsv(text) {
+  const rows = []; let row = []; let field = ""; let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c === "\r") { /* skip */ }
+      else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((f) => f.trim() !== ""));
+}
+function normalizeHeader(h) { return h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function guessColumn(headers, candidates) {
+  const norm = headers.map(normalizeHeader);
+  for (const cand of candidates) { const idx = norm.indexOf(cand); if (idx !== -1) return idx; }
+  for (let i = 0; i < norm.length; i++) if (candidates.some((c) => norm[i].includes(c))) return i;
+  return -1;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Small UI primitives                                                    */
+/* ---------------------------------------------------------------------- */
+
+function Icon({ name, size = 16, className = "", style = {} }) {
+  return <i className={`ti ti-${name} ${className}`} style={{ fontSize: size, lineHeight: 1, ...style }} aria-hidden="true" />;
+}
+
+function Badge({ label, color, soft }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap" style={{ background: soft, color }}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+function IconButton({ onClick, title, children, danger }) {
+  return (
+    <button onClick={onClick} title={title}
+      className="inline-flex items-center justify-center w-8 h-8 rounded-lg border transition-colors"
+      style={{ borderColor: BRAND.border, color: danger ? "#993556" : BRAND.sub, background: "white" }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = danger ? "#FBEAF0" : "#F1EFE8")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "white")}>
+      {children}
+    </button>
+  );
+}
+function PrimaryButton({ onClick, children, type = "button", full }) {
+  return (
+    <button type={type} onClick={onClick}
+      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition-transform active:scale-[0.98] ${full ? "w-full" : ""}`}
+      style={{ background: BRAND.tealDark }}>
+      {children}
+    </button>
+  );
+}
+function SecondaryButton({ onClick, children, type = "button" }) {
+  return (
+    <button type={type} onClick={onClick}
+      className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium border transition-colors"
+      style={{ borderColor: BRAND.border, color: BRAND.ink, background: "white" }}>
+      {children}
+    </button>
+  );
+}
+function Field({ label, children, required, hint }) {
+  return (
+    <label className="block mb-3.5">
+      <span className="block text-xs font-medium mb-1.5" style={{ color: BRAND.sub }}>
+        {label} {required && <span style={{ color: "#993556" }}>*</span>}
+      </span>
+      {children}
+      {hint && <span className="block text-xs mt-1" style={{ color: BRAND.sub }}>{hint}</span>}
+    </label>
+  );
+}
+const inputCls = "w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 transition-shadow";
+const inputStyle = { borderColor: BRAND.border, background: "white", color: BRAND.ink };
+
+function StatCard({ label, value, iconName, accent }) {
+  return (
+    <div className="rounded-xl p-4 flex items-start justify-between" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+      <div>
+        <p className="text-xs font-medium mb-1" style={{ color: BRAND.sub }}>{label}</p>
+        <p className="text-2xl font-semibold" style={{ color: BRAND.ink }}>{value}</p>
+      </div>
+      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ background: accent + "1A", color: accent }}>
+        <Icon name={iconName} size={18} />
+      </div>
+    </div>
+  );
+}
+function EmptyState({ iconName, title, subtitle, action }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+      <div className="w-12 h-12 rounded-full flex items-center justify-center mb-3" style={{ background: "#E1F5EE", color: BRAND.tealDark }}>
+        <Icon name={iconName} size={22} />
+      </div>
+      <p className="text-sm font-medium mb-1" style={{ color: BRAND.ink }}>{title}</p>
+      <p className="text-sm mb-4" style={{ color: BRAND.sub }}>{subtitle}</p>
+      {action}
+    </div>
+  );
+}
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,36,28,0.45)" }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`w-full ${wide ? "max-w-2xl" : "max-w-md"} rounded-2xl overflow-hidden flex flex-col`} style={{ background: BRAND.card, maxHeight: "88vh" }}>
+        <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: `1px solid ${BRAND.border}` }}>
+          <h3 className="text-base font-semibold" style={{ color: BRAND.ink }}>{title}</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ color: BRAND.sub }}><Icon name="x" size={18} /></button>
+        </div>
+        <div className="px-5 py-4 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+function ConfirmDialog({ text, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(15,36,28,0.45)" }}>
+      <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: BRAND.card }}>
+        <div className="flex items-center gap-2 mb-3" style={{ color: "#993556" }}>
+          <Icon name="alert-triangle" size={18} /><span className="text-sm font-semibold">Confirm delete</span>
+        </div>
+        <p className="text-sm mb-5" style={{ color: BRAND.ink }}>{text}</p>
+        <div className="flex gap-2 justify-end">
+          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+          <button onClick={onConfirm} className="rounded-lg px-4 py-2.5 text-sm font-medium text-white" style={{ background: "#993556" }}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function Logo() {
+  return (
+    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 p-1.5" style={{ background: "white" }}>
+      <img src={`data:image/png;base64,${LOGO_B64}`} alt="Grassroot Soccer" className="w-full h-full object-contain" />
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Chart.js wrapper                                                       */
+/* ---------------------------------------------------------------------- */
+
+function ChartBox({ type, data, options, height = 240 }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const key = JSON.stringify({ data, options, type });
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(canvasRef.current, { type, data, options: { responsive: true, maintainAspectRatio: false, ...options } });
+    return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
+  }, [key]);
+  return <div style={{ position: "relative", height }}><canvas ref={canvasRef}></canvas></div>;
+}
+
+const AXIS_COLOR = "#5C6B65";
+const GRID_COLOR = "#E3E7E4";
+
+/* ---------------------------------------------------------------------- */
+/* App                                                                     */
+/* ---------------------------------------------------------------------- */
+
+function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [loadedKeys, setLoadedKeys] = useState({});
+  const [saveError, setSaveError] = useState(null);
+
+  const [trainings, setTrainings] = useState([]);
+  const [trainers, setTrainers] = useState([]);
+  const [participants, setParticipants] = useState([]);
+  const [countries, setCountries] = useState(DEFAULT_COUNTRIES);
+
+  useEffect(() => {
+    if (CONFIG_IS_PLACEHOLDER) return;
+    const unsub1 = watchKey("trainings", [], (v) => {
+      const migrated = (v || []).map((t) => ({
+        curriculum: t.curriculum || t.type || "", trainingType: t.trainingType || "",
+        reportSummary: t.reportSummary || "", reportLink: t.reportLink || "", ...t,
+      }));
+      setTrainings(migrated);
+      setLoadedKeys((k) => ({ ...k, trainings: true }));
+    });
+    const unsub2 = watchKey("trainers", [], (v) => { setTrainers(v || []); setLoadedKeys((k) => ({ ...k, trainers: true })); });
+    const unsub3 = watchKey("participants", [], (v) => { setParticipants(v || []); setLoadedKeys((k) => ({ ...k, participants: true })); });
+    const unsub4 = watchKey("countries", null, (v) => {
+      setCountries(v && v.length ? v : DEFAULT_COUNTRIES);
+      setLoadedKeys((k) => ({ ...k, countries: true }));
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+  }, []);
+
+  const loading = !CONFIG_IS_PLACEHOLDER && !(loadedKeys.trainings && loadedKeys.trainers && loadedKeys.participants && loadedKeys.countries);
+
+  const persist = useCallback(async (key, value) => {
+    const ok = await saveKey(key, value);
+    if (!ok) { setSaveError("Could not save your last change. Check your connection and try again."); setTimeout(() => setSaveError(null), 4000); }
+  }, []);
+
+  const updateTrainings = useCallback((next) => { setTrainings(next); persist("trainings", next); }, [persist]);
+  const updateTrainers = useCallback((next) => { setTrainers(next); persist("trainers", next); }, [persist]);
+  const updateParticipants = useCallback((next) => { setParticipants(next); persist("participants", next); }, [persist]);
+  const updateCountries = useCallback((next) => { setCountries(next); persist("countries", next); }, [persist]);
+
+  const ensureCountry = useCallback((name) => {
+    if (!name) return;
+    if (!countries.includes(name)) updateCountries([...countries, name].sort());
+  }, [countries, updateCountries]);
+
+  const trainerById = useMemo(() => { const m = {}; trainers.forEach((t) => (m[t.id] = t)); return m; }, [trainers]);
+  const participantById = useMemo(() => { const m = {}; participants.forEach((p) => (m[p.id] = p)); return m; }, [participants]);
+
+  const NAV = [
+    { id: "dashboard", label: "Dashboard", icon: "layout-dashboard" },
+    { id: "trainings", label: "Trainings", icon: "calendar" },
+    { id: "reports", label: "Reports", icon: "file-text" },
+    { id: "trainers", label: "Trainers", icon: "user-cog" },
+    { id: "participants", label: "Participants", icon: "users" },
+  ];
+
+  if (CONFIG_IS_PLACEHOLDER) return <SetupNeeded />;
+
+  if (loading) {
+    return (
+      <div className="w-full flex items-center justify-center py-24" style={{ background: BRAND.bg, minHeight: "100vh" }}>
+        <Icon name="loader-2" size={28} className="tms-spin" style={{ color: BRAND.tealDark }} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full min-h-screen" style={{ background: BRAND.bg, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+      <div style={{ background: BRAND.pitch }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 pb-0">
+          <div className="flex items-center gap-3 pb-4">
+            <Logo />
+            <div>
+              <h1 className="text-white text-base sm:text-lg font-semibold leading-tight">GRS Training Management System</h1>
+              <p className="text-xs" style={{ color: "#8FB3A8" }}>Trainings across countries, trainers &amp; participants</p>
+            </div>
+          </div>
+          <div className="flex gap-1 overflow-x-auto pb-0 -mb-px">
+            {NAV.map((n) => {
+              const active = tab === n.id;
+              return (
+                <button key={n.id} onClick={() => setTab(n.id)}
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors"
+                  style={{ color: active ? "white" : "#8FB3A8", borderColor: active ? BRAND.teal : "transparent" }}>
+                  <Icon name={n.icon} size={17} />{n.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ height: 3, background: `linear-gradient(90deg, ${BRAND.teal}, ${BRAND.amber})` }} />
+      </div>
+
+      {saveError && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-3">
+          <div className="rounded-lg px-3 py-2 text-sm flex items-center gap-2" style={{ background: "#FBEAF0", color: "#72243E" }}>
+            <Icon name="alert-triangle" size={15} /> {saveError}
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        {tab === "dashboard" && <Dashboard trainings={trainings} trainers={trainers} participants={participants} countries={countries} />}
+        {tab === "trainings" && (
+          <TrainingsView trainings={trainings} updateTrainings={updateTrainings} trainers={trainers} participants={participants}
+            countries={countries} ensureCountry={ensureCountry} trainerById={trainerById} participantById={participantById} />
+        )}
+        {tab === "reports" && <ReportsView trainings={trainings} updateTrainings={updateTrainings} countries={countries} trainerById={trainerById} />}
+        {tab === "trainers" && <TrainersView trainers={trainers} updateTrainers={updateTrainers} trainings={trainings} countries={countries} ensureCountry={ensureCountry} />}
+        {tab === "participants" && <ParticipantsView participants={participants} updateParticipants={updateParticipants} trainings={trainings} countries={countries} ensureCountry={ensureCountry} />}
+      </div>
+      <p className="text-center text-xs pb-6" style={{ color: BRAND.sub }}>Data is stored in your Firebase project and shared with everyone who has this link.</p>
+    </div>
+  );
+}
+
+function SetupNeeded() {
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6" style={{ background: BRAND.bg }}>
+      <div className="max-w-lg w-full rounded-2xl p-6" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-4" style={{ background: "#FAEEDA", color: "#854F0B" }}>
+          <Icon name="settings" size={22} />
+        </div>
+        <h1 className="text-lg font-semibold mb-2" style={{ color: BRAND.ink }}>One setup step left</h1>
+        <p className="text-sm mb-3" style={{ color: BRAND.sub }}>
+          This app needs a Firebase project to store its data. Open <code>index.html</code> in a text editor,
+          find the <code>window.__FIREBASE_CONFIG__</code> block near the top, and paste in your project's config values.
+        </p>
+        <p className="text-sm" style={{ color: BRAND.sub }}>See <code>README.md</code> for the exact steps (about 5 minutes, no coding required).</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Country select                                                         */
+/* ---------------------------------------------------------------------- */
+
+function CountrySelect({ value, onChange, countries, ensureCountry }) {
+  const [adding, setAdding] = useState(false);
+  const [newVal, setNewVal] = useState("");
+  if (adding) {
+    return (
+      <div className="flex gap-2">
+        <input autoFocus className={inputCls} style={inputStyle} placeholder="Country name" value={newVal} onChange={(e) => setNewVal(e.target.value)} />
+        <button type="button" className="rounded-lg px-3 text-sm font-medium text-white shrink-0" style={{ background: BRAND.tealDark }}
+          onClick={() => { const v = newVal.trim(); if (v) { ensureCountry(v); onChange(v); } setAdding(false); setNewVal(""); }}>
+          Add
+        </button>
+      </div>
+    );
+  }
+  return (
+    <select className={inputCls} style={inputStyle} value={value} onChange={(e) => { if (e.target.value === "__add__") setAdding(true); else onChange(e.target.value); }}>
+      <option value="">Select country\u2026</option>
+      {countries.map((c) => <option key={c} value={c}>{c}</option>)}
+      <option value="__add__">+ Add new country\u2026</option>
+    </select>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Dashboard                                                               */
+/* ---------------------------------------------------------------------- */
+
+function Dashboard({ trainings, trainers, participants, countries }) {
+  const [fCountry, setFCountry] = useState("All");
+  const [fCurriculum, setFCurriculum] = useState("All");
+
+  const filtered = useMemo(() =>
+    trainings.filter((t) => (fCountry === "All" || t.country === fCountry) && (fCurriculum === "All" || t.curriculum === fCurriculum)),
+    [trainings, fCountry, fCurriculum]
+  );
+
+  const totalParticipantSlots = useMemo(() => filtered.reduce((sum, t) => sum + (t.participantIds?.length || 0), 0), [filtered]);
+  const activeCountries = useMemo(() => new Set(filtered.map((t) => t.country)).size, [filtered]);
+  const activeTrainers = useMemo(() => new Set(filtered.map((t) => t.trainerId).filter(Boolean)).size, [filtered]);
+
+  const byCountry = useMemo(() => {
+    const m = {}; filtered.forEach((t) => { m[t.country] = (m[t.country] || 0) + 1; });
+    return Object.entries(m).map(([country, count]) => ({ country, count })).sort((a, b) => b.count - a.count);
+  }, [filtered]);
+
+  const byCurriculum = useMemo(() => {
+    const m = {}; filtered.forEach((t) => { m[t.curriculum] = (m[t.curriculum] || 0) + 1; });
+    return Object.entries(m).filter(([k]) => k).map(([name, value]) => ({ name, value, color: curriculumMeta(name).color }));
+  }, [filtered]);
+
+  const byLevel = useMemo(() => {
+    const m = {}; filtered.forEach((t) => { m[t.trainingType] = (m[t.trainingType] || 0) + 1; });
+    return Object.entries(m).filter(([k]) => k).map(([name, count]) => ({ name, count, color: levelMeta(name).color }));
+  }, [filtered]);
+
+  const byMonth = useMemo(() => {
+    const m = {}; filtered.forEach((t) => { const k = monthKey(t.startDate); if (!k) return; m[k] = (m[k] || 0) + 1; });
+    const keys = Object.keys(m).sort().slice(-12);
+    return keys.map((k) => ({ month: new Date(k + "-01").toLocaleDateString(undefined, { month: "short", year: "2-digit" }), count: m[k] }));
+  }, [filtered]);
+
+  const upcoming = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return filtered.filter((t) => t.startDate >= today && t.status !== "Cancelled").sort((a, b) => a.startDate.localeCompare(b.startDate)).slice(0, 6);
+  }, [filtered]);
+
+  const exportReport = () => {
+    const rows = [["Title", "Training type", "Curriculum", "Country", "Venue", "Start date", "End date", "Trainer", "Participants", "Status", "Report link"]];
+    filtered.forEach((t) => rows.push([t.title, t.trainingType, t.curriculum, t.country, t.venue || "", t.startDate, t.endDate || "", t.trainerName || "", (t.participantIds || []).length, t.status, t.reportLink || ""]));
+    downloadCsv("training-report.csv", rows);
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
+        <div className="flex flex-wrap gap-2">
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCountry} onChange={(e) => setFCountry(e.target.value)}>
+            <option value="All">All countries</option>{countries.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCurriculum} onChange={(e) => setFCurriculum(e.target.value)}>
+            <option value="All">All curriculums</option>{ALL_CURRICULUMS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+          </select>
+        </div>
+        <SecondaryButton onClick={exportReport}><Icon name="download" size={15} /> Export report (CSV)</SecondaryButton>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <StatCard label="Trainings" value={filtered.length} iconName="calendar" accent={BRAND.tealDark} />
+        <StatCard label="Participants (slots)" value={totalParticipantSlots} iconName="users" accent="#534AB7" />
+        <StatCard label="Countries active" value={activeCountries} iconName="world" accent="#185FA5" />
+        <StatCard label="Trainers active" value={activeTrainers} iconName="user-cog" accent="#854F0B" />
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState iconName="calendar" title="No trainings yet" subtitle="Add a training to see it reflected in the dashboard." />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+          <div className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+            <p className="text-sm font-medium mb-3" style={{ color: BRAND.ink }}>Trainings by country</p>
+            <ChartBox type="bar" height={240}
+              data={{ labels: byCountry.map((d) => d.country), datasets: [{ data: byCountry.map((d) => d.count), backgroundColor: BRAND.tealDark, borderRadius: 4, maxBarThickness: 18 }] }}
+              options={{ indexAxis: "y", plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { precision: 0, color: AXIS_COLOR, font: { size: 11 } }, grid: { color: GRID_COLOR } }, y: { ticks: { color: AXIS_COLOR, font: { size: 11 } }, grid: { display: false } } } }}
+            />
+          </div>
+
+          <div className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+            <p className="text-sm font-medium mb-3" style={{ color: BRAND.ink }}>Trainings by curriculum</p>
+            <ChartBox type="doughnut" height={240}
+              data={{ labels: byCurriculum.map((d) => d.name), datasets: [{ data: byCurriculum.map((d) => d.value), backgroundColor: byCurriculum.map((d) => d.color), borderColor: "#fff", borderWidth: 2 }] }}
+              options={{ plugins: { legend: { position: "bottom", labels: { color: AXIS_COLOR, font: { size: 11 }, boxWidth: 10, boxHeight: 10 } } } }}
+            />
+          </div>
+
+          <div className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+            <p className="text-sm font-medium mb-3" style={{ color: BRAND.ink }}>Trainings by type</p>
+            <ChartBox type="bar" height={220}
+              data={{ labels: byLevel.map((d) => d.name), datasets: [{ data: byLevel.map((d) => d.count), backgroundColor: byLevel.map((d) => d.color), borderRadius: 4, maxBarThickness: 40 }] }}
+              options={{ plugins: { legend: { display: false } }, scales: { x: { ticks: { color: AXIS_COLOR, font: { size: 10 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0, color: AXIS_COLOR, font: { size: 11 } }, grid: { color: GRID_COLOR } } } }}
+            />
+          </div>
+
+          <div className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+            <p className="text-sm font-medium mb-3" style={{ color: BRAND.ink }}>Trainings per month</p>
+            <ChartBox type="line" height={220}
+              data={{ labels: byMonth.map((d) => d.month), datasets: [{ data: byMonth.map((d) => d.count), borderColor: BRAND.amber, backgroundColor: BRAND.amber, tension: 0.35, pointRadius: 3 }] }}
+              options={{ plugins: { legend: { display: false } }, scales: { x: { ticks: { color: AXIS_COLOR, font: { size: 11 } }, grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0, color: AXIS_COLOR, font: { size: 11 } }, grid: { color: GRID_COLOR } } } }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+        <p className="text-sm font-medium mb-3" style={{ color: BRAND.ink }}>Upcoming trainings</p>
+        {upcoming.length === 0 ? (
+          <p className="text-sm" style={{ color: BRAND.sub }}>Nothing scheduled ahead right now.</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {upcoming.map((t) => {
+              const cm = curriculumMeta(t.curriculum);
+              return (
+                <div key={t.id} className="flex items-center justify-between gap-3 py-2" style={{ borderBottom: `1px solid ${BRAND.border}` }}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: BRAND.ink }}>{t.title}</p>
+                    <p className="text-xs flex items-center gap-1 mt-0.5" style={{ color: BRAND.sub }}>
+                      <Icon name="map-pin" size={12} /> {t.country} &middot; <Icon name="clock" size={12} /> {fmtDate(t.startDate)}
+                    </p>
+                  </div>
+                  <Badge label={t.curriculum} color={cm.color} soft={cm.soft} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Trainings                                                              */
+/* ---------------------------------------------------------------------- */
+
+function emptyTraining() {
+  return { id: null, title: "", trainingType: TRAINING_LEVELS[0].name, curriculum: CURRICULUMS[0].name, country: "", venue: "",
+    startDate: "", endDate: "", trainerId: "", participantIds: [], status: "Planned", notes: "", reportSummary: "", reportLink: "" };
+}
+
+function TrainingsView({ trainings, updateTrainings, trainers, participants, countries, ensureCountry, trainerById, participantById }) {
+  const [query, setQuery] = useState("");
+  const [fCountry, setFCountry] = useState("All");
+  const [fCurriculum, setFCurriculum] = useState("All");
+  const [modalData, setModalData] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return trainings.filter((t) => fCountry === "All" || t.country === fCountry)
+      .filter((t) => fCurriculum === "All" || t.curriculum === fCurriculum)
+      .filter((t) => !q || t.title.toLowerCase().includes(q) || (t.venue || "").toLowerCase().includes(q))
+      .sort((a, b) => (b.startDate || "").localeCompare(a.startDate || ""));
+  }, [trainings, query, fCountry, fCurriculum]);
+
+  const openNew = () => setModalData(emptyTraining());
+  const openEdit = (t) => setModalData({ ...t });
+
+  const save = (form) => {
+    if (!form.title.trim() || !form.country || !form.startDate) return;
+    const trainer = trainers.find((tr) => tr.id === form.trainerId);
+    const record = { ...form, trainerName: trainer ? trainer.name : "" };
+    if (record.id) updateTrainings(trainings.map((t) => (t.id === record.id ? record : t)));
+    else { record.id = makeId("trn"); updateTrainings([record, ...trainings]); }
+    setModalData(null);
+  };
+  const remove = (id) => { updateTrainings(trainings.filter((t) => t.id !== id)); setDeleting(null); };
+
+  const countryParticipants = (country) => participants.filter((p) => !country || p.country === country);
+  const countryTrainers = (country) => trainers.filter((t) => !country || t.country === country);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-2 flex-1 min-w-0">
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: BRAND.sub }}><Icon name="search" size={15} /></span>
+            <input className={inputCls} style={{ ...inputStyle, paddingLeft: 32, width: 200 }} placeholder="Search trainings\u2026" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCountry} onChange={(e) => setFCountry(e.target.value)}>
+            <option value="All">All countries</option>{countries.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCurriculum} onChange={(e) => setFCurriculum(e.target.value)}>
+            <option value="All">All curriculums</option>{ALL_CURRICULUMS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+          </select>
+        </div>
+        <PrimaryButton onClick={openNew}><Icon name="plus" size={16} /> New training</PrimaryButton>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState iconName="calendar"
+          title={trainings.length === 0 ? "No trainings recorded" : "No matches"}
+          subtitle={trainings.length === 0 ? "Log your first training to get started." : "Try a different search or filter."}
+          action={trainings.length === 0 && <PrimaryButton onClick={openNew}><Icon name="plus" size={16} /> New training</PrimaryButton>} />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {filtered.map((t) => {
+            const cm = curriculumMeta(t.curriculum); const lm = levelMeta(t.trainingType); const sm = statusMeta(t.status);
+            return (
+              <div key={t.id} className="rounded-xl p-4 flex flex-wrap items-center gap-3" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+                <div className="flex-1 min-w-[180px] cursor-pointer" onClick={() => setViewing(t)}>
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <p className="text-sm font-semibold" style={{ color: BRAND.ink }}>{t.title}</p>
+                    {t.trainingType && <Badge label={t.trainingType} color={lm.color} soft={lm.soft} />}
+                    {t.curriculum && <Badge label={t.curriculum} color={cm.color} soft={cm.soft} />}
+                    <Badge label={t.status} color={sm.color} soft={sm.soft} />
+                    {(t.reportLink || t.reportSummary) && <span className="inline-flex items-center gap-1 text-xs" style={{ color: BRAND.tealDark }}><Icon name="file-text" size={12} /> Report added</span>}
+                  </div>
+                  <p className="text-xs flex items-center gap-3 flex-wrap" style={{ color: BRAND.sub }}>
+                    <span className="flex items-center gap-1"><Icon name="map-pin" size={12} /> {t.country}{t.venue ? ` \u00b7 ${t.venue}` : ""}</span>
+                    <span className="flex items-center gap-1"><Icon name="clock" size={12} /> {fmtDate(t.startDate)}{t.endDate ? ` \u2013 ${fmtDate(t.endDate)}` : ""}</span>
+                    <span className="flex items-center gap-1"><Icon name="users" size={12} /> {(t.participantIds || []).length} participants</span>
+                  </p>
+                </div>
+                <div className="flex gap-2 ml-auto">
+                  <IconButton title="Edit" onClick={() => openEdit(t)}><Icon name="pencil" size={14} /></IconButton>
+                  <IconButton title="Delete" danger onClick={() => setDeleting(t)}><Icon name="trash" size={14} /></IconButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modalData && (
+        <TrainingModal data={modalData} onClose={() => setModalData(null)} onSave={save} countries={countries} ensureCountry={ensureCountry}
+          trainers={countryTrainers(modalData.country)} allParticipants={countryParticipants(modalData.country)} />
+      )}
+      {viewing && (
+        <Modal title={viewing.title} onClose={() => setViewing(null)}>
+          <TrainingDetail training={viewing} trainerById={trainerById} participantById={participantById} />
+        </Modal>
+      )}
+      {deleting && <ConfirmDialog text={`Delete "${deleting.title}"? This can't be undone.`} onConfirm={() => remove(deleting.id)} onCancel={() => setDeleting(null)} />}
+    </div>
+  );
+}
+
+function TrainingDetail({ training: t, trainerById, participantById }) {
+  const cm = curriculumMeta(t.curriculum); const lm = levelMeta(t.trainingType); const sm = statusMeta(t.status);
+  const trainer = t.trainerId ? trainerById[t.trainerId] : null;
+  const roster = (t.participantIds || []).map((id) => participantById[id]).filter(Boolean);
+  return (
+    <div>
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {t.trainingType && <Badge label={t.trainingType} color={lm.color} soft={lm.soft} />}
+        {t.curriculum && <Badge label={t.curriculum} color={cm.color} soft={cm.soft} />}
+        <Badge label={t.status} color={sm.color} soft={sm.soft} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Country</p><p style={{ color: BRAND.ink }}>{t.country}</p></div>
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Venue</p><p style={{ color: BRAND.ink }}>{t.venue || "\u2014"}</p></div>
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Start date</p><p style={{ color: BRAND.ink }}>{fmtDate(t.startDate)}</p></div>
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">End date</p><p style={{ color: BRAND.ink }}>{fmtDate(t.endDate)}</p></div>
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Trainer</p><p style={{ color: BRAND.ink }}>{trainer ? trainer.name : "\u2014"}</p></div>
+        <div><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Participants</p><p style={{ color: BRAND.ink }}>{roster.length}</p></div>
+      </div>
+      {t.notes && <div className="mb-4"><p style={{ color: BRAND.sub }} className="text-xs mb-0.5">Notes</p><p className="text-sm" style={{ color: BRAND.ink }}>{t.notes}</p></div>}
+      {(t.reportSummary || t.reportLink) && (
+        <div className="mb-4 p-3 rounded-lg" style={{ background: BRAND.bg }}>
+          <p className="text-xs font-medium mb-1 flex items-center gap-1" style={{ color: BRAND.tealDark }}><Icon name="file-text" size={13} /> Training report</p>
+          {t.reportSummary && <p className="text-sm mb-1" style={{ color: BRAND.ink }}>{t.reportSummary}</p>}
+          {t.reportLink && <a href={t.reportLink} target="_blank" rel="noreferrer" className="text-sm inline-flex items-center gap-1" style={{ color: BRAND.tealDark }}><Icon name="link" size={12} /> View full report</a>}
+        </div>
+      )}
+      <p style={{ color: BRAND.sub }} className="text-xs mb-1.5">Participant roster</p>
+      {roster.length === 0 ? <p className="text-sm" style={{ color: BRAND.sub }}>No participants linked yet.</p> : (
+        <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+          {roster.map((p) => (
+            <div key={p.id} className="text-sm py-1.5 px-2 rounded-lg flex justify-between" style={{ background: BRAND.bg }}>
+              <span style={{ color: BRAND.ink }}>{p.name}</span><span style={{ color: BRAND.sub }}>{p.gender || ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TrainingModal({ data, onClose, onSave, countries, ensureCountry, trainers, allParticipants }) {
+  const [form, setForm] = useState(data);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const toggleParticipant = (id) => setForm((f) => { const has = f.participantIds.includes(id); return { ...f, participantIds: has ? f.participantIds.filter((x) => x !== id) : [...f.participantIds, id] }; });
+
+  return (
+    <Modal title={data.id ? "Edit training" : "New training"} onClose={onClose} wide>
+      <div className="grid sm:grid-cols-2 gap-x-4">
+        <Field label="Title" required>
+          <input className={inputCls} style={inputStyle} value={form.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. ToC \u2013 Nairobi Cohort 3" />
+        </Field>
+        <Field label="Training type" required hint="What kind of training event this is">
+          <select className={inputCls} style={inputStyle} value={form.trainingType} onChange={(e) => set("trainingType", e.target.value)}>
+            {ALL_LEVELS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Curriculum" required hint="Which SKILLZ programme is being taught">
+          <select className={inputCls} style={inputStyle} value={form.curriculum} onChange={(e) => set("curriculum", e.target.value)}>
+            {ALL_CURRICULUMS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Country" required>
+          <CountrySelect value={form.country} onChange={(v) => { set("country", v); set("trainerId", ""); }} countries={countries} ensureCountry={ensureCountry} />
+        </Field>
+        <Field label="Venue">
+          <input className={inputCls} style={inputStyle} value={form.venue} onChange={(e) => set("venue", e.target.value)} placeholder="e.g. Community Hall, Kibera" />
+        </Field>
+        <Field label="Start date" required>
+          <input type="date" className={inputCls} style={inputStyle} value={form.startDate} onChange={(e) => set("startDate", e.target.value)} />
+        </Field>
+        <Field label="End date">
+          <input type="date" className={inputCls} style={inputStyle} value={form.endDate} onChange={(e) => set("endDate", e.target.value)} />
+        </Field>
+        <Field label="Trainer">
+          <select className={inputCls} style={inputStyle} value={form.trainerId} onChange={(e) => set("trainerId", e.target.value)}>
+            <option value="">{form.country ? "Select trainer\u2026" : "Select a country first"}</option>
+            {trainers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select className={inputCls} style={inputStyle} value={form.status} onChange={(e) => set("status", e.target.value)}>
+            {STATUS_OPTIONS.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <Field label={`Participants${form.country ? ` in ${form.country}` : ""} (${form.participantIds.length} selected)`}>
+        {!form.country ? <p className="text-sm" style={{ color: BRAND.sub }}>Select a country to see available participants.</p> :
+          allParticipants.length === 0 ? <p className="text-sm" style={{ color: BRAND.sub }}>No participants recorded for {form.country} yet. Add some in the Participants tab.</p> : (
+          <div className="border rounded-lg max-h-40 overflow-y-auto" style={{ borderColor: BRAND.border }}>
+            {allParticipants.map((p) => {
+              const checked = form.participantIds.includes(p.id);
+              return (
+                <label key={p.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer" style={{ borderBottom: `1px solid ${BRAND.border}` }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleParticipant(p.id)} />
+                  <span style={{ color: BRAND.ink }}>{p.name}</span><span className="text-xs ml-auto" style={{ color: BRAND.sub }}>{p.gender}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </Field>
+
+      <Field label="Notes">
+        <textarea className={inputCls} style={{ ...inputStyle, minHeight: 60 }} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Any additional context" />
+      </Field>
+
+      <div className="rounded-lg p-3 mb-1" style={{ background: BRAND.bg }}>
+        <p className="text-xs font-medium mb-2 flex items-center gap-1" style={{ color: BRAND.ink }}><Icon name="file-text" size={13} /> Training report</p>
+        <Field label="Report summary" hint="A short write-up of outcomes, attendance, challenges, etc.">
+          <textarea className={inputCls} style={{ ...inputStyle, minHeight: 60, background: "white" }} value={form.reportSummary} onChange={(e) => set("reportSummary", e.target.value)} placeholder="Summarize how the training went\u2026" />
+        </Field>
+        <Field label="Report link" hint="Paste a link to the full report (Google Drive, Dropbox, SharePoint, etc.)">
+          <input className={inputCls} style={{ ...inputStyle, background: "white" }} value={form.reportLink} onChange={(e) => set("reportLink", e.target.value)} placeholder="https://drive.google.com/\u2026" />
+        </Field>
+      </div>
+
+      <div className="flex justify-end gap-2 mt-2">
+        <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
+        <PrimaryButton onClick={() => onSave(form)}>Save training</PrimaryButton>
+      </div>
+    </Modal>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Reports                                                                 */
+/* ---------------------------------------------------------------------- */
+
+function ReportsView({ trainings, updateTrainings, countries, trainerById }) {
+  const [fCountry, setFCountry] = useState("All");
+  const [fStatus, setFStatus] = useState("All");
+  const [editing, setEditing] = useState(null);
+
+  const filtered = useMemo(() => trainings.filter((t) => fCountry === "All" || t.country === fCountry)
+    .filter((t) => { if (fStatus === "All") return true; const hasReport = !!(t.reportSummary || t.reportLink); return fStatus === "With report" ? hasReport : !hasReport; })
+    .sort((a, b) => (b.startDate || "").localeCompare(a.startDate || "")), [trainings, fCountry, fStatus]);
+
+  const missingCount = useMemo(() => trainings.filter((t) => t.status === "Completed" && !(t.reportSummary || t.reportLink)).length, [trainings]);
+
+  const save = (form) => { updateTrainings(trainings.map((t) => (t.id === form.id ? { ...t, reportSummary: form.reportSummary, reportLink: form.reportLink } : t))); setEditing(null); };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-2">
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCountry} onChange={(e) => setFCountry(e.target.value)}>
+            <option value="All">All countries</option>{countries.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <option value="All">All trainings</option><option value="With report">With report</option><option value="Missing report">Missing report</option>
+          </select>
+        </div>
+      </div>
+
+      {missingCount > 0 && (
+        <div className="rounded-lg px-3 py-2 text-sm flex items-center gap-2 mb-4" style={{ background: "#FAEEDA", color: "#633806" }}>
+          <Icon name="alert-triangle" size={15} /> {missingCount} completed training{missingCount === 1 ? "" : "s"} still {missingCount === 1 ? "needs" : "need"} a report.
+        </div>
+      )}
+
+      <p className="text-xs mb-3" style={{ color: BRAND.sub }}>
+        A "report" here is a short written summary plus an optional link to the full document (Drive, Dropbox, SharePoint, etc.) &mdash; this tool stores text and links, not uploaded files.
+      </p>
+
+      {filtered.length === 0 ? <EmptyState iconName="file-text" title="No trainings match" subtitle="Adjust the filters above, or add a training first." /> : (
+        <div className="flex flex-col gap-2">
+          {filtered.map((t) => {
+            const cm = curriculumMeta(t.curriculum);
+            const hasReport = !!(t.reportSummary || t.reportLink);
+            return (
+              <div key={t.id} className="rounded-xl p-4 flex flex-wrap items-start gap-3" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+                <div className="flex-1 min-w-[200px]">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <p className="text-sm font-semibold" style={{ color: BRAND.ink }}>{t.title}</p>
+                    <Badge label={t.curriculum} color={cm.color} soft={cm.soft} />
+                    {hasReport ? <span className="inline-flex items-center gap-1 text-xs" style={{ color: BRAND.tealDark }}><Icon name="circle-check" size={12} /> Report added</span>
+                      : <span className="inline-flex items-center gap-1 text-xs" style={{ color: "#854F0B" }}><Icon name="alert-triangle" size={12} /> No report yet</span>}
+                  </div>
+                  <p className="text-xs flex items-center gap-3 flex-wrap mb-2" style={{ color: BRAND.sub }}>
+                    <span className="flex items-center gap-1"><Icon name="map-pin" size={12} /> {t.country}</span>
+                    <span className="flex items-center gap-1"><Icon name="clock" size={12} /> {fmtDate(t.startDate)}</span>
+                    <span>{t.trainerName || (t.trainerId && trainerById[t.trainerId]?.name) || "No trainer set"}</span>
+                  </p>
+                  {t.reportSummary && <p className="text-sm mb-1" style={{ color: BRAND.ink }}>{t.reportSummary}</p>}
+                  {t.reportLink && <a href={t.reportLink} target="_blank" rel="noreferrer" className="text-sm inline-flex items-center gap-1" style={{ color: BRAND.tealDark }}><Icon name="link" size={12} /> Open report</a>}
+                </div>
+                <SecondaryButton onClick={() => setEditing(t)}>{hasReport ? <><Icon name="pencil" size={14} /> Edit report</> : <><Icon name="upload" size={14} /> Add report</>}</SecondaryButton>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && <Modal title={`Report \u2014 ${editing.title}`} onClose={() => setEditing(null)}><ReportForm training={editing} onSave={save} onCancel={() => setEditing(null)} /></Modal>}
+    </div>
+  );
+}
+
+function ReportForm({ training, onSave, onCancel }) {
+  const [form, setForm] = useState({ id: training.id, reportSummary: training.reportSummary || "", reportLink: training.reportLink || "" });
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  return (
+    <div>
+      <Field label="Report summary" hint="Attendance, outcomes, challenges, follow-up actions, etc.">
+        <textarea className={inputCls} style={{ ...inputStyle, minHeight: 120 }} value={form.reportSummary} onChange={(e) => set("reportSummary", e.target.value)} placeholder="Write or paste the report summary here\u2026" />
+      </Field>
+      <Field label="Link to full report" hint="Upload the document to Drive/Dropbox/SharePoint, then paste the share link here">
+        <input className={inputCls} style={inputStyle} value={form.reportLink} onChange={(e) => set("reportLink", e.target.value)} placeholder="https://drive.google.com/\u2026" />
+      </Field>
+      <div className="flex justify-end gap-2 mt-2">
+        <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+        <PrimaryButton onClick={() => onSave(form)}>Save report</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+/* Trainers                                                                */
+/* ---------------------------------------------------------------------- */
+
+function emptyTrainer() { return { id: null, name: "", email: "", phone: "", country: "", city: "", certTier: "", specialization: "", status: "Active" }; }
+
+function TrainersView({ trainers, updateTrainers, trainings, countries, ensureCountry }) {
+  const [modalData, setModalData] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+  const [query, setQuery] = useState("");
+  const [importing, setImporting] = useState(false);
+
+  const countFor = (id) => trainings.filter((t) => t.trainerId === id).length;
+  const filtered = trainers.filter((t) => !query || t.name.toLowerCase().includes(query.toLowerCase()));
+
+  const save = (form) => {
+    if (!form.name.trim()) return;
+    if (form.id) updateTrainers(trainers.map((t) => (t.id === form.id ? form : t)));
+    else updateTrainers([{ ...form, id: makeId("trr") }, ...trainers]);
+    setModalData(null);
+  };
+  const remove = (id) => { updateTrainers(trainers.filter((t) => t.id !== id)); setDeleting(null); };
+  const importTrainers = (rows) => {
+    const withIds = rows.map((r) => ({ ...r, id: makeId("trr") }));
+    updateTrainers([...withIds, ...trainers]);
+    withIds.forEach((t) => { if (t.country) ensureCountry(t.country); });
+    setImporting(false);
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: BRAND.sub }}><Icon name="search" size={15} /></span>
+          <input className={inputCls} style={{ ...inputStyle, paddingLeft: 32, width: 220 }} placeholder="Search trainers\u2026" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <div className="flex gap-2">
+          <SecondaryButton onClick={() => setImporting(true)}><Icon name="upload" size={15} /> Import CSV</SecondaryButton>
+          <PrimaryButton onClick={() => setModalData(emptyTrainer())}><Icon name="plus" size={16} /> New trainer</PrimaryButton>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState iconName="user-cog" title="No trainers yet" subtitle="Add trainers one by one, or import your existing list as a CSV."
+          action={<div className="flex gap-2"><SecondaryButton onClick={() => setImporting(true)}><Icon name="upload" size={15} /> Import CSV</SecondaryButton><PrimaryButton onClick={() => setModalData(emptyTrainer())}><Icon name="plus" size={16} /> New trainer</PrimaryButton></div>} />
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-3">
+          {filtered.map((t) => (
+            <div key={t.id} className="rounded-xl p-4" style={{ background: BRAND.card, border: `1px solid ${BRAND.border}` }}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: BRAND.ink }}>{t.name}</p>
+                  <p className="text-xs flex items-center gap-1 mt-0.5" style={{ color: BRAND.sub }}><Icon name="map-pin" size={12} /> {[t.city, t.country].filter(Boolean).join(", ") || "\u2014"}</p>
+                </div>
+                <div className="flex gap-2">
+                  <IconButton title="Edit" onClick={() => setModalData(t)}><Icon name="pencil" size={14} /></IconButton>
+                  <IconButton title="Delete" danger onClick={() => setDeleting(t)}><Icon name="trash" size={14} /></IconButton>
+                </div>
+              </div>
+              <div className="flex gap-1.5 mt-2 flex-wrap">
+                {t.certTier && <Badge label={t.certTier} color="#185FA5" soft="#E6F1FB" />}
+                {t.status === "Inactive" && <Badge label="Inactive" color="#993556" soft="#FBEAF0" />}
+              </div>
+              {t.specialization && <p className="text-xs mt-2" style={{ color: BRAND.sub }}>{t.specialization}</p>}
+              <div className="text-xs mt-3 flex flex-col gap-0.5" style={{ color: BRAND.sub }}>{t.email && <span>{t.email}</span>}{t.phone && <span>{t.phone}</span>}</div>
+              <div className="mt-3 pt-2" style={{ borderTop: `1px solid ${BRAND.border}` }}>
+                <span className="text-xs" style={{ color: BRAND.sub }}>{countFor(t.id)} training{countFor(t.id) === 1 ? "" : "s"} led</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modalData && <Modal title={modalData.id ? "Edit trainer" : "New trainer"} onClose={() => setModalData(null)}><TrainerForm data={modalData} countries={countries} ensureCountry={ensureCountry} onSave={save} onCancel={() => setModalData(null)} /></Modal>}
+      {deleting && <ConfirmDialog text={`Delete trainer "${deleting.name}"? Trainings already assigned to them will keep the name but lose the link.`} onConfirm={() => remove(deleting.id)} onCancel={() => setDeleting(null)} />}
+      {importing && <Modal title="Import trainers from CSV" onClose={() => setImporting(false)} wide><TrainerImportForm onImport={importTrainers} onCancel={() => setImporting(false)} /></Modal>}
+    </div>
+  );
+}
+
+function TrainerForm({ data, countries, ensureCountry, onSave, onCancel }) {
+  const [form, setForm] = useState(data);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  return (
+    <div>
+      <Field label="Full name" required><input className={inputCls} style={inputStyle} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Amina Yusuf" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Certification tier">
+          <select className={inputCls} style={inputStyle} value={form.certTier} onChange={(e) => set("certTier", e.target.value)}>
+            <option value="">Select\u2026</option>{CERT_TIERS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select className={inputCls} style={inputStyle} value={form.status} onChange={(e) => set("status", e.target.value)}>
+            {TRAINER_STATUS.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Country"><CountrySelect value={form.country} onChange={(v) => set("country", v)} countries={countries} ensureCountry={ensureCountry} /></Field>
+        <Field label="City"><input className={inputCls} style={inputStyle} value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="e.g. Nairobi" /></Field>
+      </div>
+      <Field label="Specialization" hint="Curriculums this trainer is skilled in">
+        <input className={inputCls} style={inputStyle} value={form.specialization} onChange={(e) => set("specialization", e.target.value)} placeholder="e.g. SKILLZ Core, SKILLZ Guy" />
+      </Field>
+      <Field label="Email"><input type="email" className={inputCls} style={inputStyle} value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="name@example.org" /></Field>
+      <Field label="Phone"><input className={inputCls} style={inputStyle} value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+254\u2026" /></Field>
+      <div className="flex justify-end gap-2 mt-2">
+        <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+        <PrimaryButton onClick={() => onSave(form)}>Save trainer</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
+function TrainerImportForm({ onImport, onCancel }) {
+  const [step, setStep] = useState("upload");
+  const [headers, setHeaders] = useState([]);
+  const [dataRows, setDataRows] = useState([]);
+  const [mapping, setMapping] = useState({ name: -1, email: -1, phone: -1, country: -1, city: -1, certTier: -1, specialization: -1, status: -1 });
+  const [fileName, setFileName] = useState("");
+  const fileRef = useRef(null);
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rows = parseCsv(String(e.target.result || ""));
+      if (rows.length === 0) return;
+      const hdrs = rows[0]; const body = rows.slice(1);
+      setHeaders(hdrs); setDataRows(body);
+      setMapping({
+        name: guessColumn(hdrs, ["name", "fullname", "trainername"]),
+        email: guessColumn(hdrs, ["email", "emailaddress"]),
+        phone: guessColumn(hdrs, ["phone", "phonenumber", "mobile", "contact"]),
+        country: guessColumn(hdrs, ["country", "countrypartner"]),
+        city: guessColumn(hdrs, ["city", "town", "location"]),
+        certTier: guessColumn(hdrs, ["certificationtier", "certification", "tier"]),
+        specialization: guessColumn(hdrs, ["specialization", "programspecialization", "curriculum"]),
+        status: guessColumn(hdrs, ["status", "activeinactive"]),
+      });
+      setStep("map");
+    };
+    reader.readAsText(file);
+  };
+
+  const doImport = () => {
+    if (mapping.name === -1) return;
+    const rows = dataRows.map((r) => ({
+      name: (r[mapping.name] || "").trim(),
+      email: mapping.email !== -1 ? (r[mapping.email] || "").trim() : "",
+      phone: mapping.phone !== -1 ? (r[mapping.phone] || "").trim() : "",
+      country: mapping.country !== -1 ? (r[mapping.country] || "").trim() : "",
+      city: mapping.city !== -1 ? (r[mapping.city] || "").trim() : "",
+      certTier: mapping.certTier !== -1 ? (r[mapping.certTier] || "").trim() : "",
+      specialization: mapping.specialization !== -1 ? (r[mapping.specialization] || "").trim() : "",
+      status: mapping.status !== -1 ? (r[mapping.status] || "").trim() || "Active" : "Active",
+    })).filter((r) => r.name);
+    onImport(rows);
+  };
+
+  if (step === "upload") {
+    return (
+      <div>
+        <p className="text-sm mb-4" style={{ color: BRAND.sub }}>
+          Export your trainer list as a CSV (in Google Sheets: File &rarr; Download &rarr; Comma Separated Values) and upload it here.
+          You'll be able to match your columns to the right fields before anything is imported.
+        </p>
+        <div className="rounded-xl border-2 border-dashed flex flex-col items-center justify-center py-10 px-4 text-center cursor-pointer" style={{ borderColor: BRAND.border }}
+          onClick={() => fileRef.current?.click()}
+          onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files?.[0]); }} onDragOver={(e) => e.preventDefault()}>
+          <Icon name="upload" size={22} style={{ color: BRAND.tealDark }} className="mb-2" />
+          <p className="text-sm font-medium" style={{ color: BRAND.ink }}>Click to choose a CSV file, or drag it here</p>
+          <p className="text-xs mt-1" style={{ color: BRAND.sub }}>.csv only</p>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
+        </div>
+        <div className="flex justify-end gap-2 mt-4"><SecondaryButton onClick={onCancel}>Cancel</SecondaryButton></div>
+      </div>
+    );
+  }
+
+  if (step === "map") {
+    const fields = [
+      { key: "name", label: "Name", required: true }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+      { key: "country", label: "Country" }, { key: "city", label: "City" }, { key: "certTier", label: "Certification tier" },
+      { key: "specialization", label: "Specialization" }, { key: "status", label: "Status" },
+    ];
+    return (
+      <div>
+        <p className="text-sm mb-1" style={{ color: BRAND.ink }}>{fileName} &middot; {dataRows.length} rows found</p>
+        <p className="text-xs mb-4" style={{ color: BRAND.sub }}>Match each field to a column from your file.</p>
+        <div className="grid sm:grid-cols-2 gap-x-4">
+          {fields.map((f) => (
+            <Field key={f.key} label={f.label} required={f.required}>
+              <select className={inputCls} style={inputStyle} value={mapping[f.key]} onChange={(e) => setMapping((m) => ({ ...m, [f.key]: Number(e.target.value) }))}>
+                <option value={-1}>{"\u2014 Don't import \u2014"}</option>
+                {headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+              </select>
+            </Field>
+          ))}
+        </div>
+        {dataRows.length > 0 && (
+          <div className="rounded-lg overflow-x-auto mb-3" style={{ border: `1px solid ${BRAND.border}` }}>
+            <table className="w-full text-xs">
+              <thead><tr style={{ background: BRAND.bg }}>{fields.map((f) => <th key={f.key} className="text-left px-2 py-1.5 font-medium" style={{ color: BRAND.sub }}>{f.label}</th>)}</tr></thead>
+              <tbody>{dataRows.slice(0, 3).map((r, i) => (<tr key={i}>{fields.map((f) => <td key={f.key} className="px-2 py-1.5" style={{ color: BRAND.ink }}>{mapping[f.key] !== -1 ? r[mapping[f.key]] : "\u2014"}</td>)}</tr>))}</tbody>
+            </table>
+          </div>
+        )}
+        <div className="flex justify-between gap-2 mt-2">
+          <SecondaryButton onClick={() => setStep("upload")}>Back</SecondaryButton>
+          <div className="flex gap-2">
+            <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+            <PrimaryButton onClick={doImport}><Icon name="arrow-right" size={15} /> Import {dataRows.filter((r) => mapping.name !== -1 && (r[mapping.name] || "").trim()).length} trainers</PrimaryButton>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Participants                                                           */
+/* ---------------------------------------------------------------------- */
+
+function emptyParticipant() { return { id: null, name: "", gender: "", age: "", country: "", contact: "", group: "" }; }
+
+function ParticipantsView({ participants, updateParticipants, trainings, countries, ensureCountry }) {
+  const [modalData, setModalData] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+  const [query, setQuery] = useState("");
+  const [fCountry, setFCountry] = useState("All");
+
+  const trainingsFor = (id) => trainings.filter((t) => (t.participantIds || []).includes(id));
+  const filtered = participants.filter((p) => fCountry === "All" || p.country === fCountry).filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase()));
+
+  const save = (form) => {
+    if (!form.name.trim()) return;
+    if (form.id) updateParticipants(participants.map((p) => (p.id === form.id ? form : p)));
+    else updateParticipants([{ ...form, id: makeId("ptc") }, ...participants]);
+    setModalData(null);
+  };
+  const remove = (id) => { updateParticipants(participants.filter((p) => p.id !== id)); setDeleting(null); };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-2">
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: BRAND.sub }}><Icon name="search" size={15} /></span>
+            <input className={inputCls} style={{ ...inputStyle, paddingLeft: 32, width: 200 }} placeholder="Search participants\u2026" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <select className={`${inputCls} w-auto`} style={inputStyle} value={fCountry} onChange={(e) => setFCountry(e.target.value)}>
+            <option value="All">All countries</option>{countries.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <PrimaryButton onClick={() => setModalData(emptyParticipant())}><Icon name="plus" size={16} /> New participant</PrimaryButton>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState iconName="users" title="No participants yet" subtitle="Add participants so you can link them to trainings."
+          action={<PrimaryButton onClick={() => setModalData(emptyParticipant())}><Icon name="plus" size={16} /> New participant</PrimaryButton>} />
+      ) : (
+        <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${BRAND.border}` }}>
+          <table className="w-full text-sm" style={{ tableLayout: "fixed" }}>
+            <thead>
+              <tr style={{ background: BRAND.bg, color: BRAND.sub }}>
+                <th className="text-left font-medium px-3 py-2.5">Name</th>
+                <th className="text-left font-medium px-3 py-2.5 hidden sm:table-cell">Gender</th>
+                <th className="text-left font-medium px-3 py-2.5 hidden sm:table-cell">Country</th>
+                <th className="text-left font-medium px-3 py-2.5 hidden md:table-cell">Trainings</th>
+                <th className="text-right font-medium px-3 py-2.5 w-20">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p, i) => (
+                <tr key={p.id} style={{ background: i % 2 ? BRAND.bg : "white" }}>
+                  <td className="px-3 py-2.5 truncate" style={{ color: BRAND.ink }}>{p.name}</td>
+                  <td className="px-3 py-2.5 hidden sm:table-cell" style={{ color: BRAND.sub }}>{p.gender || "\u2014"}</td>
+                  <td className="px-3 py-2.5 hidden sm:table-cell" style={{ color: BRAND.sub }}>{p.country || "\u2014"}</td>
+                  <td className="px-3 py-2.5 hidden md:table-cell" style={{ color: BRAND.sub }}>{trainingsFor(p.id).length}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <div className="flex gap-1.5 justify-end">
+                      <IconButton title="Edit" onClick={() => setModalData(p)}><Icon name="pencil" size={13} /></IconButton>
+                      <IconButton title="Delete" danger onClick={() => setDeleting(p)}><Icon name="trash" size={13} /></IconButton>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modalData && <Modal title={modalData.id ? "Edit participant" : "New participant"} onClose={() => setModalData(null)}><ParticipantForm data={modalData} countries={countries} ensureCountry={ensureCountry} onSave={save} onCancel={() => setModalData(null)} /></Modal>}
+      {deleting && <ConfirmDialog text={`Delete "${deleting.name}"? They'll also be removed from any training rosters.`} onConfirm={() => remove(deleting.id)} onCancel={() => setDeleting(null)} />}
+    </div>
+  );
+}
+
+function ParticipantForm({ data, countries, ensureCountry, onSave, onCancel }) {
+  const [form, setForm] = useState(data);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  return (
+    <div>
+      <Field label="Full name" required><input className={inputCls} style={inputStyle} value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Mwangi" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Gender">
+          <select className={inputCls} style={inputStyle} value={form.gender} onChange={(e) => set("gender", e.target.value)}>
+            <option value="">Select\u2026</option>{GENDERS.map((g) => <option key={g} value={g}>{g}</option>)}
+          </select>
+        </Field>
+        <Field label="Age"><input type="number" min="0" className={inputCls} style={inputStyle} value={form.age} onChange={(e) => set("age", e.target.value)} /></Field>
+      </div>
+      <Field label="Country"><CountrySelect value={form.country} onChange={(v) => set("country", v)} countries={countries} ensureCountry={ensureCountry} /></Field>
+      <Field label="School / group (optional)"><input className={inputCls} style={inputStyle} value={form.group} onChange={(e) => set("group", e.target.value)} placeholder="e.g. Riverside Secondary" /></Field>
+      <Field label="Contact (optional)"><input className={inputCls} style={inputStyle} value={form.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Phone or guardian contact" /></Field>
+      <div className="flex justify-end gap-2 mt-2">
+        <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+        <PrimaryButton onClick={() => onSave(form)}>Save participant</PrimaryButton>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------- */
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
